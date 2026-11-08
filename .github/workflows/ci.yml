@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Every job here runs on CPU-only runners, and the CPU wheels are an order of
+  # magnitude smaller than the CUDA ones.  Without this the install dominates
+  # the run time of the whole workflow.
+  PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+  # No job in CI is allowed to download model weights or datasets: a test that
+  # needs the network is a test that fails for reasons unrelated to the code.
+  # The tiny randomly-initialised models in tests/ are built locally instead.
+  HF_HUB_OFFLINE: "1"
+
+jobs:
+  test:
+    name: tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,verify]"
+
+      - name: Run test suite
+        run: pytest tests/ -q -m "not slow and not gpu and not network"
+
+  coverage:
+    name: coverage, cache cross-check and experiments
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package, test and verification dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,verify,plot]"
+
+      # The suite is the project's main correctness claim, so the floor is
+      # enforced rather than merely reported.
+      - name: Coverage
+        run: >
+          pytest tests/ -q -m "not gpu and not network" --cov=arborist
+          --cov-report=term-missing --cov-fail-under=90
+
+      # Sharing one KV cache across a tree of reasoning traces is an
+      # optimisation, and an optimisation that changes the logits is a bug that
+      # would silently corrupt every search result in the repository.  This
+      # compares the shared-cache path against independent re-prefill on the
+      # same prefixes and fails on any disagreement beyond the stated tolerance.
+      # Each staged check turns itself on as soon as the phase that creates it
+      # lands, so the build is green from the first commit and starts enforcing
+      # every gate the moment there is something to enforce.  A check that is
+      # skipped says so in the log rather than passing silently.
+      - name: Cross-check shared-cache decoding against re-prefill
+        run: |
+          if [ -f benchmarks/cross_check_cache.py ]; then
+            python benchmarks/cross_check_cache.py
+          else
+            echo "skipped: benchmarks/cross_check_cache.py lands in phase 1"
+          fi
+
+      # The sandbox is a security boundary, so its limits are tested rather
+      # than assumed: a program that tries to exceed each resource limit must
+      # be stopped by it.
+      - name: Sandbox containment tests
+        run: |
+          if [ -f tests/test_sandbox.py ]; then
+            pytest tests/test_sandbox.py -q -m sandbox
+          else
+            echo "skipped: tests/test_sandbox.py lands in phase 2"
+          fi
+
+      # Short end-to-end runs of every experiment, so the figures in the
+      # README stay reproducible rather than becoming stale artefacts.
+      - name: Experiment pipelines smoke test
+        run: |
+          ran=0
+          for script in tree_engine verifier_audit value_ground_truth \
+                        prm_calibration step_localization matched_compute \
+                        grpo_training selective_prediction contamination; do
+            if [ -f "experiments/$script.py" ]; then
+              PYTHONPATH=experiments python "experiments/$script.py" --quick
+              ran=$((ran + 1))
+            else
+              echo "skipped: experiments/$script.py not written yet"
+            fi
+          done
+          echo "ran $ran experiment smoke tests"
+
+      - name: Examples smoke test
+        run: |
+          for script in examples/*.py; do
+            [ -e "$script" ] || { echo "skipped: no examples yet"; break; }
+            python "$script"
+          done

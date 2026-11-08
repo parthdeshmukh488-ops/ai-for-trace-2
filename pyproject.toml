@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arborist"
+version = "0.1.0"
+description = "Test-time compute and reasoning traces, measured against a Monte-Carlo ground truth"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = [
+  "test-time-compute",
+  "process-reward-model",
+  "tree-search",
+  "reinforcement-learning",
+  "calibration",
+  "reasoning",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "numpy>=1.24",
+  "scipy>=1.10",
+  "torch>=2.1",
+  "transformers>=4.40",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "pytest-cov>=4.1"]
+# sympy supplies the symbolic-equivalence stage of the answer checker.  The
+# checker degrades to numeric comparison without it, which changes the measured
+# verifier error rate -- so CI installs it rather than letting those tests skip.
+verify = ["sympy>=1.12"]
+plot = ["matplotlib>=3.7"]
+data = ["datasets>=2.18"]
+# An independent inference engine, used as the throughput oracle in F1 and as
+# the fast path for the rollout-heavy experiments.  Everything works without
+# it, more slowly.
+fast = ["vllm>=0.4"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+  "slow: rollout-heavy and training runs",
+  "verify: requires sympy for the symbolic answer-equivalence stage",
+  "sandbox: executes generated code in a resource-limited subprocess",
+  "gpu: requires CUDA; skipped on CPU-only runners",
+  "network: downloads model weights or datasets",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
